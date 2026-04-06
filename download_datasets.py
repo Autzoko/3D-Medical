@@ -240,12 +240,16 @@ DATASETS = {
 # Helper functions
 # ============================================================================
 
-def run_cmd(cmd, desc="", check=True):
-    """Run a shell command with logging."""
+def run_cmd(cmd, desc="", check=True, show_output=False):
+    """Run a shell command with logging. If show_output=True, stream stdout/stderr live."""
     print(f"  >> {desc or cmd}")
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if show_output:
+        result = subprocess.run(cmd, shell=True)
+    else:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if check and result.returncode != 0:
-        print(f"  [WARN] Command failed: {result.stderr[:500]}")
+        stderr = result.stderr[:500] if hasattr(result, "stderr") and result.stderr else ""
+        print(f"  [WARN] Command failed: {stderr}")
         return False
     return True
 
@@ -267,8 +271,106 @@ def ensure_pip_package(package, pip_name=None):
             return False
 
 
+def _format_size(n_bytes):
+    """Format byte count to human-readable string."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n_bytes) < 1024:
+            return f"{n_bytes:.1f} {unit}"
+        n_bytes /= 1024
+    return f"{n_bytes:.1f} PB"
+
+
+def _format_time(seconds):
+    """Format seconds to human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        return f"{seconds / 60:.0f}m {seconds % 60:.0f}s"
+    else:
+        return f"{seconds / 3600:.0f}h {(seconds % 3600) / 60:.0f}m"
+
+
+def _download_with_progress(url, output_path):
+    """Download a file with a real-time progress bar using urllib."""
+    import time
+    import urllib.request
+
+    output_path = Path(output_path)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+
+    req = urllib.request.Request(url, headers={"User-Agent": "Medical3D-Downloader/1.0"})
+
+    try:
+        response = urllib.request.urlopen(req, timeout=30)
+    except Exception as e:
+        print(f"  [ERROR] Failed to connect: {e}")
+        return False
+
+    total_size = response.headers.get("Content-Length")
+    total_size = int(total_size) if total_size else None
+
+    downloaded = 0
+    start_time = time.time()
+    last_print_time = start_time
+    chunk_size = 1024 * 1024  # 1 MB chunks
+
+    try:
+        with open(tmp_path, "wb") as f:
+            while True:
+                chunk = response.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+
+                now = time.time()
+                # Update progress every 0.5 seconds
+                if now - last_print_time >= 0.5 or not chunk:
+                    elapsed = now - start_time
+                    speed = downloaded / elapsed if elapsed > 0 else 0
+
+                    if total_size:
+                        pct = downloaded / total_size * 100
+                        bar_width = 30
+                        filled = int(bar_width * downloaded / total_size)
+                        bar = "=" * filled + ">" + " " * (bar_width - filled - 1)
+                        eta = (total_size - downloaded) / speed if speed > 0 else 0
+                        print(
+                            f"\r  [{bar}] {pct:5.1f}%  "
+                            f"{_format_size(downloaded)}/{_format_size(total_size)}  "
+                            f"{_format_size(speed)}/s  "
+                            f"ETA {_format_time(eta)}   ",
+                            end="", flush=True,
+                        )
+                    else:
+                        print(
+                            f"\r  Downloaded {_format_size(downloaded)}  "
+                            f"{_format_size(speed)}/s  "
+                            f"elapsed {_format_time(elapsed)}   ",
+                            end="", flush=True,
+                        )
+                    last_print_time = now
+
+        # Finish progress bar
+        elapsed = time.time() - start_time
+        print(
+            f"\r  Done: {_format_size(downloaded)} in {_format_time(elapsed)} "
+            f"({_format_size(downloaded / elapsed if elapsed > 0 else 0)}/s)          "
+        )
+
+        # Rename tmp to final
+        tmp_path.rename(output_path)
+        return True
+
+    except Exception as e:
+        print(f"\n  [ERROR] Download interrupted: {e}")
+        if tmp_path.exists():
+            tmp_path.unlink()
+        return False
+
+
 def download_file(url, output_path, desc=""):
-    """Download a file using wget or curl."""
+    """Download a file with progress bar. Falls back to wget/curl if urllib fails."""
     output_path = Path(output_path)
     if output_path.exists():
         print(f"  [SKIP] Already exists: {output_path}")
@@ -276,18 +378,24 @@ def download_file(url, output_path, desc=""):
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     desc = desc or f"Downloading {output_path.name}"
-    print(f"  {desc}...")
+    print(f"  {desc}")
+    print(f"  URL: {url}")
 
-    # Try wget first, then curl
+    # Try Python-native download with progress bar first
+    if _download_with_progress(url, output_path):
+        return True
+
+    # Fallback to wget (which has its own progress) or curl
+    print("  Falling back to wget/curl...")
     if shutil.which("wget"):
-        cmd = f'wget -q --show-progress -O "{output_path}" "{url}"'
+        cmd = f'wget --progress=bar:force -O "{output_path}" "{url}"'
+        return run_cmd(cmd, desc=desc, check=True, show_output=True)
     elif shutil.which("curl"):
-        cmd = f'curl -L -o "{output_path}" "{url}"'
+        cmd = f'curl -L --progress-bar -o "{output_path}" "{url}"'
+        return run_cmd(cmd, desc=desc, check=True, show_output=True)
     else:
-        print("  [ERROR] Neither wget nor curl found. Please install one.")
+        print("  [ERROR] Download failed and neither wget nor curl found.")
         return False
-
-    return run_cmd(cmd, desc=desc, check=True)
 
 
 def extract_archive(archive_path, extract_dir):
@@ -362,6 +470,7 @@ echo "The dataset is ~260 GB, so this will take a while."
             f"cd {ds_dir} && zenodo_get 6802614",
             desc="Downloading TotalSegmentator from Zenodo",
             check=False,
+            show_output=True,
         )
     else:
         print(f"  [INFO] Download script saved to: {script}")
@@ -414,6 +523,7 @@ def download_kits(output_dir):
         f"cd {repo_dir} && {sys.executable} -m pip install -e . -q && kits23_download",
         desc="Downloading KiTS23 imaging data (this may take a while)",
         check=False,
+        show_output=True,
     )
 
 
@@ -462,6 +572,7 @@ def download_lits(output_dir):
             f"at.get('27772adef6f563a1a992c9bf2eb2ea0a726d4c3e', datastore='{ds_dir}')\"",
             desc="Downloading LiTS via Academic Torrents",
             check=False,
+            show_output=True,
         )
 
 
@@ -506,6 +617,7 @@ echo "BraTS requires Synapse registration. See instructions above."
             f"kaggle datasets download -d dschettler8845/brats-2021-task1 -p {ds_dir} --unzip",
             desc="Downloading BraTS via Kaggle",
             check=False,
+            show_output=True,
         )
     else:
         print(f"  [INFO] BraTS requires registration. Download script: {script}")
