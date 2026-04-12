@@ -19,7 +19,7 @@ try:
 except ImportError:
     HAS_NIBABEL = False
 
-from .augmentations_3d import DataAugmentationMedical3D
+from augmentations_3d import DataAugmentationMedical3D
 
 
 class Medical3DDataset(Dataset):

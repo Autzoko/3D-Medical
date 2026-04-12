@@ -26,7 +26,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .vision_transformer_3d import (
+from vision_transformer_3d import (
     DinoVisionTransformer3D,
     DINOHead,
     vit3d_small,

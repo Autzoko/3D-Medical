@@ -27,11 +27,11 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .augmentations_3d import DataAugmentationMedical3D
-from .collate_3d import collate_medical_3d
-from .dataset import DummyMedical3DDataset, Medical3DDataset
-from .masking_3d import MaskingGenerator3D
-from .ssl_meta_arch_3d import MedicalDINO3D
+from augmentations_3d import DataAugmentationMedical3D
+from collate_3d import collate_medical_3d
+from dataset import DummyMedical3DDataset, Medical3DDataset
+from masking_3d import MaskingGenerator3D
+from ssl_meta_arch_3d import MedicalDINO3D
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("medical_dino3d")

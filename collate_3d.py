@@ -20,7 +20,7 @@ from typing import Tuple
 import torch
 from torch import Tensor
 
-from .masking_3d import MaskingGenerator3D
+from masking_3d import MaskingGenerator3D
 
 
 def collate_medical_3d(

@@ -7,7 +7,7 @@ import sys
 
 
 def test_patch_embed_3d():
-    from medical_dino3d.patch_embed_3d import PatchEmbed3D
+    from patch_embed_3d import PatchEmbed3D
     pe = PatchEmbed3D(img_size=96, patch_size=16, in_chans=3, embed_dim=384, flatten_embedding=False)
     x = torch.randn(2, 3, 96, 96, 96)
     out = pe(x)
@@ -16,7 +16,7 @@ def test_patch_embed_3d():
 
 
 def test_rope_3d():
-    from medical_dino3d.rope_3d import RopePositionEmbedding3D
+    from rope_3d import RopePositionEmbedding3D
     # embed_dim=384, num_heads=4 -> D_head=96, 96/6=16 freqs per axis
     rope = RopePositionEmbedding3D(embed_dim=384, num_heads=4, dtype=torch.float32)
     sin, cos = rope(D=6, H=6, W=6)
@@ -25,7 +25,7 @@ def test_rope_3d():
 
 
 def test_masking_3d():
-    from medical_dino3d.masking_3d import MaskingGenerator3D
+    from masking_3d import MaskingGenerator3D
     mg = MaskingGenerator3D(input_size=(6, 6, 6), num_masking_patches=80)
     mask = mg(80)
     assert mask.shape == (6, 6, 6)
@@ -34,7 +34,7 @@ def test_masking_3d():
 
 
 def test_augmentation_3d():
-    from medical_dino3d.augmentations_3d import DataAugmentationMedical3D
+    from augmentations_3d import DataAugmentationMedical3D
     aug = DataAugmentationMedical3D(
         global_crops_size=96, local_crops_size=64, n_local_crops=4, modality="ct"
     )
@@ -48,7 +48,7 @@ def test_augmentation_3d():
 
 
 def test_vision_transformer_3d():
-    from medical_dino3d.vision_transformer_3d import vit3d_small
+    from vision_transformer_3d import vit3d_small
     model = vit3d_small(img_size=96, patch_size=16, n_storage_tokens=4)
     model.init_weights()
     x = torch.randn(2, 3, 96, 96, 96)
@@ -63,7 +63,7 @@ def test_vision_transformer_3d():
 
 
 def test_vit3d_multi_crop():
-    from medical_dino3d.vision_transformer_3d import vit3d_small
+    from vision_transformer_3d import vit3d_small
     model = vit3d_small(img_size=96, patch_size=16, n_storage_tokens=4)
     model.init_weights()
     # Simulate multi-crop: 2 global (96^3) + 4 local (64^3)
@@ -86,7 +86,7 @@ def test_vit3d_multi_crop():
 
 
 def test_model_init():
-    from medical_dino3d.ssl_meta_arch_3d import MedicalDINO3D
+    from ssl_meta_arch_3d import MedicalDINO3D
     model = MedicalDINO3D(
         arch="vit3d_small",
         img_size=96,

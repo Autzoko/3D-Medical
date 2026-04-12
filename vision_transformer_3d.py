@@ -27,8 +27,8 @@ import torch
 import torch.nn.init
 from torch import Tensor, nn
 
-from .patch_embed_3d import PatchEmbed3D
-from .rope_3d import RopePositionEmbedding3D
+from patch_embed_3d import PatchEmbed3D
+from rope_3d import RopePositionEmbedding3D
 
 logger = logging.getLogger("medical_dino3d")
 
