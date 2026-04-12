@@ -29,7 +29,7 @@ from torch.utils.data import DataLoader
 
 from augmentations_3d import DataAugmentationMedical3D
 from collate_3d import collate_medical_3d
-from dataset import DummyMedical3DDataset, Medical3DDataset
+from dataset import DummyMedical3DDataset, Medical3DDataset, build_mixed_dataset
 from masking_3d import MaskingGenerator3D
 from ssl_meta_arch_3d import MedicalDINO3D
 
@@ -95,10 +95,15 @@ def train(args):
             local_crops_size=args.local_crop_size,
             n_local_crops=args.n_local_crops,
         )
-    else:
+    elif len(args.data_dir) == 1:
         dataset = Medical3DDataset(
-            root=args.data_dir,
+            root=args.data_dir[0],
             modality=args.modality,
+            augmentation=augmentation,
+        )
+    else:
+        dataset = build_mixed_dataset(
+            data_dirs=args.data_dir,
             augmentation=augmentation,
         )
 
@@ -229,7 +234,8 @@ def main():
     parser = argparse.ArgumentParser("3D Medical DINO Training")
 
     # Data
-    parser.add_argument("--data_dir", type=str, default="")
+    parser.add_argument("--data_dir", type=str, nargs="+", default=[""],
+                        help="One or more data directories (auto-detects modality per dir)")
     parser.add_argument("--dummy", action="store_true", help="Use random dummy data for testing")
     parser.add_argument("--n_dummy_samples", type=int, default=64)
     parser.add_argument("--modality", type=str, default="ct", choices=["ct", "mri", "pet"])
