@@ -98,34 +98,32 @@ class RopePositionEmbedding3D(nn.Module):
         dtype = self.dtype
         dd = {"device": device, "dtype": dtype}
 
-        # Build coordinates for each axis
-        coords_d = torch.arange(0.5, D, **dd)  # [D]
-        coords_h = torch.arange(0.5, H, **dd)  # [H]
-        coords_w = torch.arange(0.5, W, **dd)  # [W]
-
-        # Apply physical spacing if provided (important for anisotropic medical images)
-        if spacing is not None:
-            spacing_d, spacing_h, spacing_w = spacing
-            coords_d = coords_d * spacing_d
-            coords_h = coords_h * spacing_h
-            coords_w = coords_w * spacing_w
-
-        # Normalize to [-1, +1]
+        # Build coordinates — exactly matching DINOv3's logic per axis
+        # DINOv3: coords_h = arange(0.5, H) / H  ->  range [0, 1)  ->  *2 - 1  ->  [-1, +1]
         if self.normalize_coords == "separate":
-            coords_d = coords_d / (coords_d.max() + 0.5) if D > 1 else coords_d
-            coords_h = coords_h / (coords_h.max() + 0.5) if H > 1 else coords_h
-            coords_w = coords_w / (coords_w.max() + 0.5) if W > 1 else coords_w
+            coords_d = torch.arange(0.5, D, **dd) / D  # [D], range [0, 1)
+            coords_h = torch.arange(0.5, H, **dd) / H
+            coords_w = torch.arange(0.5, W, **dd) / W
         elif self.normalize_coords == "max":
-            max_val = max(coords_d.max(), coords_h.max(), coords_w.max()) + 0.5
-            coords_d = coords_d / max_val
-            coords_h = coords_h / max_val
-            coords_w = coords_w / max_val
+            max_DHW = max(D, H, W)
+            coords_d = torch.arange(0.5, D, **dd) / max_DHW
+            coords_h = torch.arange(0.5, H, **dd) / max_DHW
+            coords_w = torch.arange(0.5, W, **dd) / max_DHW
+        else:
+            raise ValueError(f"Unknown normalize_coords: {self.normalize_coords}")
+
+        # Apply physical spacing scaling if provided
+        if spacing is not None:
+            s_d, s_h, s_w = spacing
+            coords_d = coords_d * s_d
+            coords_h = coords_h * s_h
+            coords_w = coords_w * s_w
 
         # Create 3D meshgrid: [D, H, W, 3]
         grid_d, grid_h, grid_w = torch.meshgrid(coords_d, coords_h, coords_w, indexing="ij")
         coords = torch.stack([grid_d, grid_h, grid_w], dim=-1)  # [D, H, W, 3]
         coords = coords.flatten(0, 2)  # [D*H*W, 3]
-        coords = 2.0 * coords - 1.0  # shift to [-1, +1]
+        coords = 2.0 * coords - 1.0  # shift range [0,1) to [-1, +1)
 
         # Training-time augmentations (same logic as DINOv3 but for 3 dims)
         if self.training and self.shift_coords is not None:

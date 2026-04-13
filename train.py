@@ -186,8 +186,13 @@ def train(args):
                 iteration=iteration,
             )
 
-            # Gradient clipping
+            # Gradient clipping + NaN protection
             grad_norm = nn.utils.clip_grad_norm_(model.student.parameters(), args.clip_grad)
+            if not torch.isfinite(grad_norm):
+                logger.warning(f"Grad norm is {grad_norm}, skipping update")
+                optimizer.zero_grad()
+                iteration += 1
+                continue
 
             # Optimizer step
             optimizer.step()

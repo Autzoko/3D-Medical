@@ -37,12 +37,25 @@ logger = logging.getLogger("medical_dino3d")
 
 
 # ---------------------------------------------------------------------------
-# Loss functions — copied from DINOv3 WITHOUT modification
-# They operate on token embeddings, not spatial grids.
+# Distributed helpers
+# ---------------------------------------------------------------------------
+
+def _get_world_size():
+    return dist.get_world_size() if dist.is_initialized() else 1
+
+
+def _all_reduce(tensor):
+    if dist.is_initialized():
+        dist.all_reduce(tensor)
+
+
+# ---------------------------------------------------------------------------
+# Loss functions — matching DINOv3 with distributed support
 # ---------------------------------------------------------------------------
 
 class DINOLoss(nn.Module):
-    """Identical to DINOv3's DINOLoss."""
+    """DINO CLS token self-distillation loss with Sinkhorn-Knopp centering.
+    Matches DINOv3's dino_clstoken_loss.py with distributed all_reduce."""
 
     def __init__(self, out_dim, student_temp=0.1, center_momentum=0.9):
         super().__init__()
@@ -53,15 +66,18 @@ class DINOLoss(nn.Module):
     @torch.no_grad()
     def sinkhorn_knopp_teacher(self, teacher_output, teacher_temp, n_iterations=3):
         teacher_output = teacher_output.float()
-        Q = torch.exp(teacher_output / teacher_temp).t()
-        B = Q.shape[1]
+        world_size = _get_world_size()
+        Q = torch.exp(teacher_output / teacher_temp).t()  # K x B
+        B = Q.shape[1] * world_size  # global batch size
         K = Q.shape[0]
 
         sum_Q = torch.sum(Q)
+        _all_reduce(sum_Q)
         Q /= sum_Q
 
         for _ in range(n_iterations):
             sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
+            _all_reduce(sum_of_rows)
             Q /= sum_of_rows
             Q /= K
             Q /= torch.sum(Q, dim=0, keepdim=True)
@@ -86,24 +102,30 @@ class DINOLoss(nn.Module):
 
 
 class iBOTPatchLoss(nn.Module):
-    """Identical to DINOv3's iBOTPatchLoss."""
+    """iBOT masked patch prediction loss with Sinkhorn-Knopp centering.
+    Matches DINOv3's ibot_patch_loss.py with distributed all_reduce."""
 
     def __init__(self, patch_out_dim, student_temp=0.1):
         super().__init__()
         self.student_temp = student_temp
 
     @torch.no_grad()
-    def sinkhorn_knopp_teacher(self, teacher_output, teacher_temp, n_masked_patches_tensor=None, n_iterations=3):
+    def sinkhorn_knopp_teacher(self, teacher_output, teacher_temp,
+                                n_masked_patches_tensor=None, n_iterations=3):
         teacher_output = teacher_output.float()
-        Q = torch.exp(teacher_output / teacher_temp).t()
-        B = n_masked_patches_tensor if n_masked_patches_tensor is not None else Q.shape[1]
+        Q = torch.exp(teacher_output / teacher_temp).t()  # K x n_masked
+        # B = total masked patches across all GPUs
+        B = n_masked_patches_tensor.clone() if n_masked_patches_tensor is not None else torch.tensor(Q.shape[1])
+        _all_reduce(B)
         K = Q.shape[0]
 
         sum_Q = torch.sum(Q)
+        _all_reduce(sum_Q)
         Q /= sum_Q
 
         for _ in range(n_iterations):
             sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
+            _all_reduce(sum_of_rows)
             Q /= sum_of_rows
             Q /= K
             Q /= torch.sum(Q, dim=0, keepdim=True)
@@ -130,7 +152,8 @@ class iBOTPatchLoss(nn.Module):
 
 
 class KoLeoLoss(nn.Module):
-    """Identical to DINOv3's KoLeoLoss."""
+    """KoLeo uniformity regularization (single-GPU version).
+    Matches DINOv3's koleo_loss.py."""
 
     def __init__(self):
         super().__init__()
@@ -145,6 +168,41 @@ class KoLeoLoss(nn.Module):
             _, indices = torch.max(dots, dim=1)
             distances = self.pdist(student_output, student_output[indices])
             loss = -torch.log(distances + eps).mean()
+        return loss
+
+
+class KoLeoLossDistributed(nn.Module):
+    """Distributed KoLeo with global nearest neighbor search.
+    Matches DINOv3's KoLeoLossDistributed."""
+
+    def __init__(self, topk=1):
+        super().__init__()
+        self.pdist = nn.PairwiseDistance(2, eps=1e-8)
+        self.topk = topk
+
+    def forward(self, student_output, eps=1e-8):
+        with torch.autocast("cuda", enabled=False):
+            student_output = F.normalize(student_output.float(), eps=eps, p=2, dim=-1)
+
+            if dist.is_initialized():
+                all_outputs = torch.cat(dist.nn.all_gather(student_output), dim=0)
+                world_size = dist.get_world_size()
+                rank = dist.get_rank()
+            else:
+                all_outputs = student_output
+                world_size = 1
+                rank = 0
+
+            local_B = len(student_output)
+            dots = torch.mm(student_output, all_outputs.t())  # local_B x global_B
+            global_B = dots.shape[1]
+            # Zero out self-matches on diagonal
+            dots.view(-1)[rank * local_B :: (global_B + 1)].fill_(-1)
+            _, indices = torch.topk(dots, dim=1, k=self.topk)
+
+            student_expanded = student_output.unsqueeze(1).repeat(1, self.topk, 1).flatten(0, 1)
+            distances = self.pdist(student_expanded, all_outputs[indices].flatten(0, 1))
+            loss = -torch.log(distances.float() + eps).mean()
         return loss
 
 

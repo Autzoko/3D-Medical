@@ -105,22 +105,26 @@ class SelfAttention(nn.Module):
         x = self.proj(x)
         return x
 
+    @staticmethod
+    def _rope_rotate_half(x: Tensor) -> Tensor:
+        """Identical to DINOv3's rope_rotate_half: swap and negate halves."""
+        x1, x2 = x.chunk(2, dim=-1)
+        return torch.cat([-x2, x1], dim=-1)
+
     def _apply_rope(self, x, sin, cos):
-        """Apply rotary position embedding."""
+        """
+        Apply rotary position embedding.
+        Identical to DINOv3's rope_apply: (x * cos) + (rotate_half(x) * sin)
+        """
         # x: (B, heads, N, head_dim)
         # sin, cos: (N, head_dim)
+        rope_dtype = sin.dtype
+        x_dtype = x.dtype
+        x = x.to(rope_dtype)
         sin = sin.unsqueeze(0).unsqueeze(0)  # (1, 1, N, head_dim)
         cos = cos.unsqueeze(0).unsqueeze(0)
-
-        x1 = x[..., 0::2]
-        x2 = x[..., 1::2]
-        sin_half = sin[..., 0::2]
-        cos_half = cos[..., 0::2]
-
-        return torch.cat([
-            x1 * cos_half - x2 * sin_half,
-            x2 * cos_half + x1 * sin_half,
-        ], dim=-1)
+        result = (x * cos) + (self._rope_rotate_half(x) * sin)
+        return result.to(x_dtype)
 
     def forward_list(self, x_list, rope_list=None):
         if rope_list is None:
